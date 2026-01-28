@@ -387,7 +387,7 @@ def main():
 
     try:
         # Step 1: Load and clean data
-        df = load_and_clean(filepath, start_date='01/11/2025', end_date=None)
+        df = load_and_clean(filepath, start_date=None, end_date=None)
 
         # Step 2: Resample to hourly
         df_hourly = make_hourly(df)
