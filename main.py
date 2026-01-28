@@ -2,7 +2,7 @@
 Smart Meter Electricity Usage Analysis
 Analyzes 15-minute interval electricity consumption data from Israeli utility smart meters.
 """
-
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -14,8 +14,9 @@ from datetime import datetime, time
 plt.style.use('seaborn-v0_8')
 warnings.filterwarnings('ignore')
 
+DAY_ORDER = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
-def load_and_clean(filepath):
+def load_and_clean(filepath, start_date=None, end_date=None):
     """
     Load and clean the smart meter CSV file.
 
@@ -57,7 +58,7 @@ def load_and_clean(filepath):
         filepath,
         skiprows=data_start_idx,
         encoding='utf-8',
-        sep='\t',
+        sep=',',
         skipinitialspace=True
     )
 
@@ -122,6 +123,12 @@ def load_and_clean(filepath):
     # Keep only the consumption column
     df = df[['consumption_kwh']]
 
+    # Filter by date range if provided
+    if start_date:
+        df = df[df.index >= pd.to_datetime(start_date, dayfirst=True)]
+    if end_date:
+        df = df[df.index <= pd.to_datetime(end_date, dayfirst=True)]
+
     print(f"Loaded {len(df)} measurements from {df.index.min()} to {df.index.max()}")
     print(f"Time resolution: 15 minutes")
 
@@ -166,7 +173,7 @@ def make_hourly(df):
 
 def plot_heatmap(df_hourly, save_path=None):
     """
-    Create a heatmap showing average hourly usage by day of week.
+    Create a heatmap showing average hourly usage by day of week with marginal totals.
 
     Parameters:
     -----------
@@ -177,9 +184,6 @@ def plot_heatmap(df_hourly, save_path=None):
     """
     print("\nCreating day-of-week vs hour heatmap...")
 
-    # Define day order for proper sorting
-    day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-
     # Create pivot table: rows=day of week, columns=hour, values=mean kWh
     pivot = df_hourly.pivot_table(
         values='consumption_kwh',
@@ -189,24 +193,51 @@ def plot_heatmap(df_hourly, save_path=None):
     )
 
     # Reorder rows by day of week
-    pivot = pivot.reindex(day_order)
+    pivot = pivot.reindex(DAY_ORDER)
 
-    # Create heatmap
-    fig, ax = plt.subplots(figsize=(14, 6))
+    # Calculate hourly totals (sum across all days for each hour)
+    hourly_totals = df_hourly.groupby('hour')['consumption_kwh'].sum()
+
+    # Create figure with gridspec for layout control
+    fig = plt.figure(figsize=(16, 8))
+    gs = fig.add_gridspec(2, 2, height_ratios=[1, 4], width_ratios=[20, 1], hspace=0.02, wspace=0.02)
+
+    # Top subplot for marginal bar plot
+    ax_top = fig.add_subplot(gs[0, 0])
+    # Bar positions need to be at 0.5, 1.5, 2.5, ... to align with heatmap cell centers
+    bar_positions = np.arange(len(hourly_totals)) + 0.5
+    ax_top.bar(bar_positions, hourly_totals.values, color='crimson', alpha=0.7, width=1.0)
+    ax_top.set_xlim(0, 24)
+    ax_top.set_ylabel('Total kWh', fontsize=10)
+    ax_top.set_xticks([])  # Remove x-axis labels
+    ax_top.spines['bottom'].set_visible(False)
+    ax_top.spines['right'].set_visible(False)
+    ax_top.grid(axis='y', alpha=0.3)
+
+    # Bottom subplot for heatmap
+    ax_heat = fig.add_subplot(gs[1, 0])
     sns.heatmap(
         pivot,
         annot=False,
-        fmt='.2f',
         cmap='YlOrRd',
-        cbar_kws={'label': 'Average kWh'},
-        ax=ax
+        cbar=False,  # add colorbar separately
+        ax=ax_heat
     )
 
-    ax.set_title('Average Hourly Electricity Usage by Day of Week', fontsize=14, fontweight='bold')
-    ax.set_xlabel('Hour of Day', fontsize=12)
-    ax.set_ylabel('Day of Week', fontsize=12)
+    ax_heat.set_xlabel('Hour of Day', fontsize=12)
+    ax_heat.set_ylabel('Day of Week', fontsize=12)
+    ax_heat.set_yticklabels(ax_heat.get_yticklabels(), rotation=0)
 
-    plt.tight_layout()
+    # Add colorbar in the right subplot
+    ax_cbar = fig.add_subplot(gs[1, 1])
+    cbar = plt.colorbar(ax_heat.collections[0], cax=ax_cbar)
+    cbar.set_label('Average kWh', fontsize=10)
+
+    # Add overall title
+    fig.suptitle('Hourly Electricity Usage by Day of Week', fontsize=14, fontweight='bold', y=0.98)
+    fig.text(0.5, 0.92,
+             'Average consumption patterns:\nTop: Total usage per hour across all days | Heatmap: Average usage by day and hour',
+             ha='center', fontsize=10, style='italic', color='gray')
 
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
@@ -237,20 +268,31 @@ def plot_daily_totals(df_hourly, save_path=None):
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
 
     # Plot 1: Daily usage over time
-    daily_totals.plot(kind='bar', ax=ax1, color='steelblue', width=0.8)
+    dates = pd.to_datetime(daily_totals.index)
+    months = dates.month
+    colors = plt.cm.Paired(months % 12)
+
+    daily_totals.plot(kind='bar', ax=ax1, color=colors, width=0.8)
     ax1.set_title('Total Daily Electricity Usage', fontsize=14, fontweight='bold')
-    ax1.set_xlabel('Date', fontsize=12)
+    ax1.set_xlabel('')
     ax1.set_ylabel('Total Usage (kWh)', fontsize=12)
     ax1.grid(axis='y', alpha=0.3)
+    ax1.set_xticks([])  # Remove x-axis ticks
+    # Add month labels
+    month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    month_positions = []
+    month_labels = []
 
-    # Rotate x-axis labels for readability
-    ax1.tick_params(axis='x', rotation=45)
+    for month in sorted(months.unique()):
+        month_indices = [i for i, m in enumerate(months) if m == month]
+        if month_indices:
+            middle_pos = (month_indices[0] + month_indices[-1]) / 2
+            month_positions.append(middle_pos)
+            month_labels.append(month_names[month - 1])
 
-    # Add value labels on top of bars (show every nth bar to avoid crowding)
-    step = max(1, len(daily_totals) // 20)  # Show ~20 labels max
-    for i, (date, value) in enumerate(daily_totals.items()):
-        if i % step == 0:
-            ax1.text(i, value, f'{value:.1f}', ha='center', va='bottom', fontsize=8)
+    for pos, label in zip(month_positions, month_labels):
+        ax1.text(pos, ax1.get_ylim()[0], label, ha='center', va='top', fontsize=10, fontweight='bold')
+
 
     # Plot 2: Total usage by day of week
     # First, recreate day_of_week for daily data
@@ -260,8 +302,7 @@ def plot_daily_totals(df_hourly, save_path=None):
     })
 
     # Group by day of week
-    day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-    dow_totals = daily_with_dow.groupby('day_of_week')['total_kwh'].sum().reindex(day_order)
+    dow_totals = daily_with_dow.groupby('day_of_week')['total_kwh'].sum().reindex(DAY_ORDER)
 
     # Create bar chart
     colors = plt.cm.Set3(range(len(dow_totals)))
@@ -275,7 +316,7 @@ def plot_daily_totals(df_hourly, save_path=None):
     # Add value labels on bars
     for i, (day, value) in enumerate(dow_totals.items()):
         ax2.text(i, value, f'{value:.1f}', ha='center', va='bottom', fontsize=10, fontweight='bold')
-
+    plt.subplots_adjust(bottom=0.15)
     plt.tight_layout()
 
     if save_path:
@@ -336,7 +377,7 @@ def main():
     Main execution function demonstrating the analysis pipeline.
     """
     # File path - update this to your actual file location
-    filepath = 'electricity_usage.csv'
+    filepath = 'electricity_bill.csv'
 
     # Check if file exists
     if not Path(filepath).exists():
@@ -346,7 +387,7 @@ def main():
 
     try:
         # Step 1: Load and clean data
-        df = load_and_clean(filepath)
+        df = load_and_clean(filepath, start_date='01/11/2025', end_date=None)
 
         # Step 2: Resample to hourly
         df_hourly = make_hourly(df)
